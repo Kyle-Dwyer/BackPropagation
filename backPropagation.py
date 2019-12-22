@@ -30,7 +30,7 @@ def diff_linear(x):
 
 class BP:
     def __init__(self, f_hidden='sigmoid', f_output='sigmoid',
-                 epsilon=1e-3, maxstep=1000, alpha=0.1, momentum=0.0):
+                 epsilon=1e-3, maxstep=1000, alpha=0.1, momentum=0.0, batch_size=100):
         self.n_input = None  # 输入层神经元数目
         self.n_hidden = []  # 隐藏层神经元数目
         self.n_output = None  # 输出层神经元数目
@@ -40,6 +40,7 @@ class BP:
         self.maxstep = maxstep  # 最大迭代次数
         self.alpha = alpha  # 学习率
         self.momentum = momentum  # 动量因子
+        self.batch_size = batch_size
 
         self.weight = []  # 每层之间的权重矩阵
         self.bias = []  # 每层之间的偏执向量
@@ -119,37 +120,52 @@ class BP:
         # 训练主函数
         X_data, y_data = self.init_param(X_data, y_data, num_list)
         step = 0
+        num_batches = 100
+        batch_size = self.batch_size
+        while step < self.maxstep:  # print("enpoch now is %s" % enpoch)
+            step += 1
+            x_in, x_out = self.forward(X_data)
+            error_sum = np.sum(abs(x_out[-1] - y_data))
+            print('step:%d, Error_sum: %s' % (step, error_sum))
+            if error_sum < self.epsilon:
+                return
+            shuffled_order = np.arange(X_data.shape[0])  # 根据记录数创建等差array
+            np.random.shuffle(shuffled_order)
+            # print(shuffled_order)
+            # Batch update
+            for batch in range(num_batches):  # 每次迭代要使用的数据量
+                test = np.arange(batch_size * batch, batch_size * (batch + 1))
+                batch_idx = np.mod(test, shuffled_order.shape[0])  # 本次迭代要使用的索引下标
+                batch_X = np.array(X_data[shuffled_order[batch_idx]])
+                batch_Y = np.array(y_data[shuffled_order[batch_idx]])
+                self.backpropagation(batch_X, batch_Y)
+        return
+
+    def backpropagation(self, X_data, y_data):
+        N = X_data.shape[0]
         # 初始化动量项
         delta_weight = np.zeros_like(self.weight)
         delta_bias = np.zeros_like(self.bias)
-        while step < self.maxstep:
-            step += 1
-            # 向前传播
-            x_in, x_out = self.forward(X_data)
-            error_avg = np.sum(abs(x_out[-1] - y_data))
-            print(error_avg)
-            if error_avg < self.epsilon:
-                break
-            # 误差反向传播，依据权值逐层计算当层误差
-            err_output = y_data - x_out[-1]  # n*o， 输出层上，每个神经元上的误差
-            delta_out = -err_output * self.diff_inspirit(self.f_output)(x_in[-1])  # n*o
-            err_hidden = delta_out @ self.weight[-1].T  # n*h， 隐藏层，每个神经元上的误差
-            # 隐藏层到输出层权值及阈值更新
-            delta_bias[-1] = np.sum(self.alpha * delta_out + self.momentum * delta_bias[-1], axis=0) / self.N
-            self.bias[-1] -= delta_bias[-1]
-            delta_weight[-1] = self.alpha * x_out[-2].T @ delta_out + self.momentum * delta_weight[-1]
-            self.weight[-1] -= delta_weight[-1]
-            # 隐藏层到隐藏层以及输入层到隐藏层权值及阈值更新
-            for i in range(len(self.n_hidden)):
-                delta_out = err_hidden * self.diff_inspirit(self.f_hidden)(x_in[-2 - i])  # n*o
-                err_hidden = delta_out @ self.weight[-2 - i].T  # 下一个隐藏层，每个神经元上的误差
-                delta_bias[-2 - i] = np.sum(self.alpha * delta_out + self.momentum * delta_bias[-2 - i],
-                                            axis=0) / self.N
-                self.bias[-2 - i] -= delta_bias[-2 - i]
-                delta_weight[-2 - i] = self.alpha * x_out[-3 - i].T @ delta_out + self.momentum * delta_weight[-2 - i]
-                self.weight[-2 - i] -= delta_weight[-2 - i]
-        print(step)
-        return
+        # 向前传播
+        x_in, x_out = self.forward(X_data)
+        # 误差反向传播，依据权值逐层计算当层误差
+        err_output = y_data - x_out[-1]  # n*o， 输出层上，每个神经元上的误差
+        delta_out = -err_output * self.diff_inspirit(self.f_output)(x_in[-1])  # n*o
+        err_hidden = delta_out @ self.weight[-1].T  # n*h， 隐藏层，每个神经元上的误差
+        # 隐藏层到输出层权值及阈值更新
+        delta_bias[-1] = np.sum(self.alpha * delta_out + self.momentum * delta_bias[-1], axis=0) / N
+        self.bias[-1] -= delta_bias[-1]
+        delta_weight[-1] = self.alpha * x_out[-2].T @ delta_out + self.momentum * delta_weight[-1]
+        self.weight[-1] -= delta_weight[-1]
+        # 隐藏层到隐藏层以及输入层到隐藏层权值及阈值更新
+        for i in range(len(self.n_hidden)):
+            delta_out = err_hidden * self.diff_inspirit(self.f_hidden)(x_in[-2 - i])  # n*o
+            err_hidden = delta_out @ self.weight[-2 - i].T  # 下一个隐藏层，每个神经元上的误差
+            delta_bias[-2 - i] = np.sum(self.alpha * delta_out + self.momentum * delta_bias[-2 - i],
+                                        axis=0) / N
+            self.bias[-2 - i] -= delta_bias[-2 - i]
+            delta_weight[-2 - i] = self.alpha * x_out[-3 - i].T @ delta_out + self.momentum * delta_weight[-2 - i]
+            self.weight[-2 - i] -= delta_weight[-2 - i]
 
     def predict(self, X):
         # 预测
@@ -160,7 +176,7 @@ class BP:
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
 
-    N = 1000
+    N = 10000
     X_data = np.linspace(-1, 1, N)
     X_data = np.transpose([X_data])
     y_data = np.exp(-X_data) * np.sin(2 * X_data)
@@ -169,14 +185,20 @@ if __name__ == '__main__':
     X_data = np.transpose([X_data])
     y_data = np.sin(X_data) * 0.5
 
-    bp = BP(f_hidden='tanh', f_output='tanh', maxstep=5000, alpha=0.001, momentum=0.5)  # 注意学习率若过大，将导致不能收敛
+    bp = BP(f_hidden='tanh', f_output='tanh', maxstep=1500, alpha=0.001, momentum=0.8)  # 注意学习率若过大，将导致不能收敛
     bp.fit(X_data, y_data, [1, 10, 10, 1])
     plt.plot(X_data, y_data * 2)
+
+    X_data = np.random.uniform(-np.pi, np.pi, 100)
+    X_data = np.transpose([X_data])
+    y_data = np.sin(X_data) * 0.5
+    pred = bp.predict(X_data) * 2
+    print("平均误差为：", np.mean(abs(pred - y_data)))
+    print("CME为：", np.mean(abs(pred - y_data) ** 2))
     pred = bp.predict(X_data) * 2
     plt.scatter(X_data, pred, color='r')
     plt.show()
 
-# 该算法给出的是可控神经元个数的单隐藏层BP算法
 # 每次运行可能有浮动，这是因为最开始生成的W和B是随机的，结束判定时的情况可能不同，而且有时候是局部最优解
 # 回归用linear，分类用sigmoid
 

@@ -70,9 +70,20 @@ def cross_entropy(P, Y):
     return np.sum(np.nan_to_num(-y * np.log(a) - (1 - y) * np.log(1 - a))) / len(a) * P.shape[1]
 
 
+def dropout(x, p):
+    randomMask = []
+    for i in range(x.shape[1]):
+        r = random.random()
+        if r < p:
+            randomMask.append(0)
+        else:
+            randomMask.append(1 / (1 - p))
+    return np.array(randomMask)
+
+
 class BP:
     def __init__(self, f_hidden='sigmoid', f_output='sigmoid',
-                 epsilon=1e-3, maxstep=1000, alpha=0.1, momentum=0.0, batch_size=1):
+                 epsilon=1e-3, maxstep=1000, alpha=0.1, momentum=0.0, batch_size=1, p=0.5):
         self.batch_size = batch_size  # mini_batch
         self.n_input = None  # 输入层神经元数目
         self.n_hidden = []  # 隐藏层神经元数目
@@ -83,6 +94,7 @@ class BP:
         self.maxstep = maxstep  # 最大迭代次数
         self.alpha = alpha  # 学习率
         self.momentum = momentum  # 动量因子
+        self.p = p  # dropout rate
 
         self.weight = []  # 每层之间的权重矩阵
         self.bias = []  # 每层之间的偏执向量
@@ -90,6 +102,7 @@ class BP:
         self.test_data = None
         self.test_result = None
         self.correct_rate = []
+        self.randomMask = []
 
     ##初始化
     def init_param(self, X_data, y_data, num_list):
@@ -152,7 +165,32 @@ class BP:
         else:
             raise ValueError('the function is not supported now')
 
-    def forward(self, X_data):
+    def forward(self, X_data, model=False):
+        if model:
+            r1 = dropout(X_data, self.p)
+            self.randomMask.append(r1)
+            x_out = [X_data * r1]
+            x_in = []
+            x_hidden_in = x_out[0] @ self.weight[0] + self.bias[0]  # n*h
+            x_hidden_out = self.inspirit(self.f_hidden)(x_hidden_in)  # n*h
+            r2 = dropout(x_hidden_out, self.p)
+            x_hidden_out *= r2
+            self.randomMask.append(r2)
+            x_in.append(x_hidden_in)
+            x_out.append(x_hidden_out)
+            for i in range(len(self.n_hidden) - 1):
+                x_hidden_in = x_hidden_out @ self.weight[i + 1] + self.bias[i + 1]  # n*h
+                x_hidden_out = self.inspirit(self.f_hidden)(x_hidden_in)  # n*h
+                r3 = dropout(x_hidden_out, self.p)
+                x_hidden_out *= r3
+                self.randomMask.append(r3)
+                x_in.append(x_hidden_in)
+                x_out.append(x_hidden_out)
+            x_output_in = x_hidden_out @ self.weight[-1] + self.bias[-1]  # n*o
+            x_output_out = self.inspirit(self.f_output)(x_output_in)  # n*o
+            x_in.append(x_output_in)
+            x_out.append(x_output_out)
+            return x_in, x_out
         # 前向传播
         x_out = [X_data]
         x_in = []
@@ -177,8 +215,11 @@ class BP:
         step = 0
         batch_size = self.batch_size
         num_batches = int(self.N / batch_size) + 1
+        model = False
         while step < self.maxstep:  # print("enpoch now is %s" % enpoch)
             step += 1
+            if step == 5:
+                model = True
             x_in, x_out = self.forward(X_data)
             Loss = cross_entropy(x_out[-1], y_data)
             x_in2, x_out2 = self.forward(self.test_data)
@@ -200,15 +241,15 @@ class BP:
                 batch_idx = np.mod(test, shuffled_order.shape[0])  # 本次迭代要使用的索引下标
                 batch_X = np.array(X_data[shuffled_order[batch_idx]])
                 batch_Y = np.array(y_data[shuffled_order[batch_idx]])
-                self.backpropagation(batch_X, batch_Y)
+                self.backpropagation(batch_X, batch_Y, model)
                 # self.update()
             self.alpha *= 0.95 + 0.05 * random.random()
         return
 
-    def backpropagation(self, X_data, y_data):
+    def backpropagation(self, X_data, y_data, model=False):
         N = X_data.shape[0]
         # 向前传播
-        x_in, x_out = self.forward(X_data)
+        x_in, x_out = self.forward(X_data, model)
         # print(np.argmax(x_out))
         # 误差反向传播，依据权值逐层计算当层误差
         crossentropy_diff = -np.divide(y_data, x_out[-1])  # 100*12
@@ -232,12 +273,22 @@ class BP:
         self.bias[-1] -= self.alpha * delta_bias[-1][0] / N + self.momentum * delta_bias[-1]
         # 隐藏层到隐藏层以及输入层到隐藏层权值及阈值更新
         for i in range(len(self.n_hidden)):
-            delta_out = err_hidden * self.diff_inspirit(self.f_hidden)(x_in[-2 - i])  # n*o
-            err_hidden = delta_out @ self.weight[-2 - i].T  # 下一个隐藏层，每个神经元上的误差
-            delta_bias[-2 - i] = np.sum(self.alpha * delta_out, axis=0) / N + self.momentum * delta_bias[-2 - i]
-            self.bias[-2 - i] -= delta_bias[-2 - i]
-            delta_weight[-2 - i] = self.alpha * x_out[-3 - i].T @ delta_out / N + self.momentum * delta_weight[-2 - i]
-            self.weight[-2 - i] -= delta_weight[-2 - i]
+            if model:
+                delta_out = err_hidden * self.diff_inspirit(self.f_hidden)(x_in[-2 - i]) * self.randomMask[-1 - i]
+                err_hidden = delta_out @ self.weight[-2 - i].T  # 下一个隐藏层，每个神经元上的误差
+                delta_bias[-2 - i] = np.sum(self.alpha * delta_out, axis=0) / N + self.momentum * delta_bias[-2 - i]
+                self.bias[-2 - i] -= delta_bias[-2 - i]
+                delta_weight[-2 - i] = self.alpha * x_out[-3 - i].T @ delta_out / N + self.momentum * delta_weight[
+                    -2 - i]
+                self.weight[-2 - i] -= delta_weight[-2 - i]
+            else:
+                delta_out = err_hidden * self.diff_inspirit(self.f_hidden)(x_in[-2 - i])  # n*o
+                err_hidden = delta_out @ self.weight[-2 - i].T  # 下一个隐藏层，每个神经元上的误差
+                delta_bias[-2 - i] = np.sum(self.alpha * delta_out, axis=0) / N + self.momentum * delta_bias[-2 - i]
+                self.bias[-2 - i] -= delta_bias[-2 - i]
+                delta_weight[-2 - i] = self.alpha * x_out[-3 - i].T @ delta_out / N + self.momentum * delta_weight[
+                    -2 - i]
+                self.weight[-2 - i] -= delta_weight[-2 - i]
 
     def update(self):
         self.weight -= self.delta_weight
@@ -321,8 +372,8 @@ def split_and_test():
     # 28-38
     results = []
     for i in range(160, 161, 10):
-        bp = BP(f_hidden='ReLu', f_output='softmax', maxstep=50, alpha=0.01, momentum=0,
-                batch_size=1)  # 注意学习率若过大，将导致不能收敛
+        bp = BP(f_hidden='ReLu', f_output='softmax', maxstep=150, alpha=0.01, momentum=0,
+                batch_size=4, p=0.1)  # 注意学习率若过大，将导致不能收敛
         # test_X, test_Y = load_all_images("./test")
         bp.init_testdata(test_X, test_Y)
         bp.fit(train_X, train_Y, [28 * 28, 180, 180, 12])
